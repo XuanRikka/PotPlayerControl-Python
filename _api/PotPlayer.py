@@ -12,7 +12,7 @@ from .window import Window
 PathLike = str | Path
 
 
-def to_path(path: PathLike | Iterable[PathLike]) -> list[Path]:
+def to_path(path: PathLike | Iterable[PathLike]) -> list[Path] | None:
     """
     把Iterable[str | Path]统一转换为list[Path]
 
@@ -25,6 +25,8 @@ def to_path(path: PathLike | Iterable[PathLike]) -> list[Path]:
         return [Path(path).resolve()]
     elif isinstance(path, Iterable):
         return [Path(i).resolve() for i in path]
+    else:
+        return None
 
 
 def check_pid_wraps(func):
@@ -86,20 +88,64 @@ class PotPlayer:
         self._control = PotPlayerControl(hwnd=window_info.hwnd)
         self.running = True
 
+    @check_pid_wraps
+    def close(self, timeout: int) -> bool:
+        try:
+            process = psutil.Process(self.pid)
+            process.terminate()
+            process.wait(timeout=timeout)
+            print(f"PotPlayer进程已正常关闭")
+        except psutil.NoSuchProcess:
+            print(f"播放器进程不存在")
+        except psutil.TimeoutExpired:
+            print(f"播放器进程关闭超时，尝试强制终止")
+            try:
+                process.kill()
+                process.wait(timeout=2)
+                print(f"播放器进程已强制终止")
+            except:
+                print(f"无法终止播放器进程")
+                return False
+        except psutil.AccessDenied:
+            print(f"权限不足，无法终止播放器进程")
+            return False
+        except Exception as e:
+            print(f"关闭进程时发生错误: {e}")
+            return False
+        finally:
+            self.running = False
+            self.pid = None
+            self.video_files = None
+            self._control = None
+        return True
+
+    @check_pid_wraps
+    def restart(self, video_files: Iterable[PathLike] | None = None):
+        video_files = to_path(video_files)
+        self.close()
+        self.run(video_files)
+
     def _check_pid(self) -> bool:
         """
         检查播放器进程是否存在
         """
         try:
-            self.running = True
-            return psutil.pid_exists(self.pid)
-        except (psutil.NoSuchProcess, psutil.AccessDenied, ValueError):
+            if self.pid is None:
+                raise ValueError("播放器没有启动")
+            elif psutil.pid_exists(self.pid):
+                self.running = True
+                return True
+            else:
+                return False
+        except (psutil.NoSuchProcess, ValueError):
             self.running = False
+            self.pid = None
             self._window = None
             self._control = None
             self.video_files = None
             return False
 
+    @check_pid_wraps
     def wait_play(self):
         """
         阻塞等待到播放开始
